@@ -1,34 +1,77 @@
-function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_mix_neu_fold] = comb_max_likelihood(selected_sfs,neutral_sfs,file_name,initial_gamma_array,boundary_array,initial_p_array,initial_theta_site,initial_lethal_array,free_alpha,neutral_alpha,zero_class)
-%selected_sfs folded, neutral_sfs folded
-%the use of the approximate sfs here makes the % number of sites under
-%strong constraint a percent less than it should be since the
-%approximation affects the singleton, doubleton, tripleton classes the most
-%where strong selection has its greatest effect
+function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_mix_neu_fold] = comb_max_likelihood(selected_sfs,neutral_sfs,file_name,initial_gamma_array,boundary_array,initial_p_array,initial_theta_site,initial_lethal_array,free_alpha,neutral_alpha,zero_class,N_pop)
+%selected_sfs folded, neutral_sfs folded, assumes they contain 0-class
 
-    gi = @(i,gamma,theta_site,L,n_samp,alpha)alpha*theta_site*L*n_samp*(1-exp(-1*gamma*(1-i/n_samp)))/((1-exp(-1*gamma))*i*(n_samp-i));
-
-    function [total_SNPs,g] = m(gamma,theta_site,L,n_samp,alpha)
-        total_SNPs = 0;
-        g = zeros((n_samp-1),1);
-        for j = 1:(n_samp-1)
-            if(gamma ~= 0) 
-                g(j) = gi(j,gamma,theta_site,L,n_samp,alpha(j)); 
-            else
-                g(j) = alpha(j)*theta_site*L/j; 
-            end
-            total_SNPs = total_SNPs + g(j);
+    function [P_samp] = sample_prob(Npop,Nsamp)
+        x = (0:(2*Npop-1))/(2*Npop);
+        P_samp = zeros((Nsamp+1),length(x));
+        for k = 0:Nsamp
+        	P_samp((k+1),:) = binopdf(k,Nsamp,x);
         end
     end
 
-   function [loglambda,alpha,g_mix_sel_fold,g_mix_neu_fold] = total_likelihood(my_selected_sfs,my_neutral_sfs,theta_site,p_array,gamma_array1,boundary_array,alpha,lethal_perc,zero_class,print_debug)
-        m_mix_sel = 0;
-        g_mix_sel = 0;
+    N__samp = 2*(length(selected_sfs)-1);
+    P__samp = sample_prob(N_pop,N__samp);
+
+    function [G,m_samp] = theor_SFS(gamma_array,mu_persite,Num_sites,N_pop,N_samp,P_samp)
+        %gamma_array: 1st column, effective selection; 2nd column, proportion of sites
+        
+        gx = @(x,gamma,mu_site,L)2*mu_site*L*(1-exp(-1*gamma*(1-x)))/((1-exp(-1*gamma))*x*(1-x));
+
+        function [total_SNPs,g] = m(gamma,mu_site,L,Npop)
+            total_SNPs = 0;
+            g = zeros((2*Npop-1),1);
+            for j = 1:(2*Npop-1)
+                freq = j/(2*Npop);
+                if(gamma ~= 0) 
+                    g(j) = gx(freq,gamma,mu_site,L); 
+                else
+                    g(j) = 2*mu_site*L/freq; 
+                end
+                total_SNPs = total_SNPs + g(j);
+            end
+        end
+
+        function [prob] = prob(k,rho)
+            if(length(P_samp) > length(rho))
+                prob = dot(rho,P_samp((k+1),(2:length(P_samp))));
+            else
+                prob = dot(rho,P_samp((k+1),:));
+            end
+
+        end
+
+        function [G,m_samp] = true_sample_G()
+            m_mix = 0;
+            g_mix = 0;
+
+            for i = 1:length(gamma_array(:,1))
+                [m_1,g_1] = m(gamma_array(i,1),mu_persite,(Num_sites*gamma_array(i,2)),N_pop);
+                m_mix = m_mix + m_1;
+                g_mix = g_mix + g_1;
+            end
+
+            m_samp = 0;
+            rho_mix = g_mix/m_mix;
+            G = zeros((N_samp-1),1);
+
+            for k = 1:(N_samp-1)
+                mix_prob = prob(k,rho_mix);
+                %G(k) = round(mix_prob*m_mix);
+                G(k) = mix_prob*m_mix;
+                m_samp = m_samp + G(k);
+            end       
+        end
+
+        [G,m_samp] = true_sample_G();   
+    end
+
+   function [loglambda,alpha,g_mix_sel_fold,g_mix_neu_fold] = total_likelihood(my_selected_sfs,my_neutral_sfs,P_samp,theta_site,p_array,gamma_array1,boundary_array,alpha,lethal_perc,zero_class,print_debug)
         p_array = abs(p_array);
         alpha = abs(alpha);
         theta_site = abs(theta_site);
         
         if(length(gamma_array1) == 1)
-           p_array(1) = 0;
+           p_array = [];
         end
         if((sum(p_array) > (1-lethal_perc)) || (lethal_perc > 1) || (lethal_perc < 0))
             loglambda = -1/0;
@@ -52,8 +95,8 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
         Num_selected_sites = sum(my_selected_sfs);
         Num_neutral_sites = sum(my_neutral_sfs);
         N_samp = 2*(length(my_selected_sfs)-1);
-        alpha_1 = ones(1,N_samp);   % this is for unfolded site freq spectra // do not use, always set to 1
-        [m_mix_neu,g_mix_neu] = m(0,theta_site,Num_neutral_sites,N_samp,alpha_1);
+        mu_persite = theta_site/(4*N_pop);
+        g_mix_neu = theor_SFS([0, 1.0],mu_persite,Num_neutral_sites,N_pop,N_samp,P_samp);
 
         %fold spectrum
         g_mix_neu_fold = zeros((length(my_neutral_sfs)-1),1);
@@ -66,7 +109,7 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
         end    
         
         if(zero_class)
-            %can't use m_mix_neu because alphas, so re-sum number of neutral SNPs
+            %can't use m_samp because alphas, so re-sum number of neutral SNPs
             g0_mix_neu = Num_neutral_sites - sum(g_mix_neu_fold);
             g_mix_neu_fold = [g0_mix_neu; g_mix_neu_fold];
             rho_mix_neu_fold = g_mix_neu_fold/Num_neutral_sites;
@@ -74,20 +117,10 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
             rho_mix_neu = g_mix_neu_fold/sum(g_mix_neu_fold);
             rho_mix_neu_fold = [0;rho_mix_neu];
         end
-        
-        for i = 1:(length(gamma_array1)-1)
-            [m_1,g_1] = m(gamma_array1(i),theta_site,(Num_selected_sites*p_array(i)),N_samp,alpha_1);
-            m_mix_sel = m_mix_sel + m_1;
-            g_mix_sel = g_mix_sel + g_1;
-            if(print_debug) 
-               % g_1 
-            end
-        end
-        
-        [m_1,g_1] = m(gamma_array1(length(gamma_array1)),theta_site,Num_selected_sites*((1-lethal_perc)-sum(p_array)),N_samp,alpha_1);
-        m_mix_sel = m_mix_sel + m_1;
-        g_mix_sel = g_mix_sel + g_1; 
-        
+             
+        gamma_array_comb = [gamma_array1;[p_array,(1-lethal_perc)-sum(p_array)]]'; 
+        g_mix_sel = theor_SFS(gamma_array_comb,mu_persite,Num_selected_sites,N_pop,N_samp,P_samp);
+     
         if(print_debug) 
            % g_1
            %alpha
@@ -105,7 +138,7 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
         end 
             
         if(zero_class)
-            %can't use m_mix_sel because alphas, so re-sum number of selected SNPs
+            %can't use m_samp because alphas, so re-sum number of selected SNPs
             g0_mix_sel = Num_selected_sites - sum(g_mix_sel_fold);
             g_mix_sel_fold = [g0_mix_sel; g_mix_sel_fold];
             rho_mix_sel_fold = g_mix_sel_fold/Num_selected_sites;
@@ -148,7 +181,7 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
 
     function [loglambda] = re_param_neutral_alpha(x)
         theta_site = x(7);
-        p_array = [1.0,0.0];
+        p_array = [];
         
         alpha(1) = x(1);
         alpha(2:3) = x(2);
@@ -157,9 +190,9 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
         alpha(16:  floor((length(neutral_sfs)-18)/2) ) = x(5);
         alpha( floor((length(neutral_sfs)-17) / 2) : (length(neutral_sfs)-2) ) = x(6);    
 
-        gamma_array_1 = [0,0];
-        b_array = [[0,0];[0,0]];       
-        loglambda = -1*total_likelihood(neutral_sfs,neutral_sfs,theta_site,p_array,gamma_array_1,b_array,alpha,0,zero_class,false);
+        gamma_array_1 = 0;
+        b_array = [0,0];       
+        loglambda = -1*total_likelihood(neutral_sfs,neutral_sfs,P__samp,theta_site,p_array,gamma_array_1,b_array,alpha,0,zero_class,false);
     end
     
     function [loglambda] = re_param(x, fixed_alpha)
@@ -184,12 +217,12 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
 
         gamma_array_1 = x( (8+length(p_array)):length(x) );
 
-        loglambda = -1*total_likelihood(selected_sfs,neutral_sfs,theta_site,p_array,gamma_array_1,boundary_array,alpha,0,zero_class,false);
+        loglambda = -1*total_likelihood(selected_sfs,neutral_sfs,P__samp,theta_site,p_array,gamma_array_1,boundary_array,alpha,0,zero_class,false);
     end
 
     function [loglambda] = re_param_neu(x, fixed_alpha)
         theta_site = x(7);
-        p_array = [1.0,0.0];
+        p_array = [];
         
         if(free_alpha && ~neutral_alpha)
             alpha(1) = x(1);
@@ -207,14 +240,14 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
             alpha( floor((length(neutral_sfs)-17) / 2) : (length(neutral_sfs)-2) ) = fixed_alpha(6);
         end
 
-        gamma_array_1 = [0,0];
-        b_array = [[0,0];[0,0]];
-        loglambda = -1*total_likelihood(selected_sfs,neutral_sfs,theta_site,p_array,gamma_array_1,b_array,alpha,0,zero_class,false);
+        gamma_array_1 = 0;
+        b_array = [0,0];
+        loglambda = -1*total_likelihood(selected_sfs,neutral_sfs,P__samp,theta_site,p_array,gamma_array_1,b_array,alpha,0,zero_class,false);
     end
 
     function [loglambda] = re_param_neu_lethal(x, fixed_alpha)
         theta_site = x(7);
-        p_array = [1.0-x(length(x)),0];
+        p_array = 1.0-x(length(x));
         
         if(free_alpha && ~neutral_alpha)
             alpha(1) = x(1);
@@ -232,10 +265,10 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
             alpha( floor((length(neutral_sfs)-17) / 2) : (length(neutral_sfs)-2) ) = fixed_alpha(6);
         end
         
-        gamma_array_1 = [0,0];
-        b_array = [[0,0];[0,0]];
+        gamma_array_1 = 0;
+        b_array = [0,0];
         lethal_perc = x(length(x));
-        loglambda = -1*total_likelihood(selected_sfs,neutral_sfs,theta_site,p_array,gamma_array_1,b_array,alpha,lethal_perc,zero_class,false);
+        loglambda = -1*total_likelihood(selected_sfs,neutral_sfs,P__samp,theta_site,p_array,gamma_array_1,b_array,alpha,lethal_perc,zero_class,false);
     end
 
     function [loglambda] = re_param_lethal(x, fixed_alpha)
@@ -261,7 +294,7 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
         gamma_array_1 = x( (8+length(p_array)):(length(x)-1) );
         lethal_perc = x(length(x));
         
-        loglambda = -1*total_likelihood(selected_sfs,neutral_sfs,theta_site,p_array,gamma_array_1,boundary_array,alpha,lethal_perc,zero_class,false);
+        loglambda = -1*total_likelihood(selected_sfs,neutral_sfs,P__samp,theta_site,p_array,gamma_array_1,boundary_array,alpha,lethal_perc,zero_class,false);
     end
 
     x_neu_alpha = [ones(1,6),initial_theta_site];
@@ -297,7 +330,7 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
     max_theta_site = abs(x_max(7));   
     max_p_array = abs(x_max(8: (8+length(p_array)-1) ));   
     max_gamma = x_max( (8+length(p_array)):length(x) );  
-    [max_likelihood,max_alpha,g_mix_sel_fold,g_mix_neu_fold] = total_likelihood(selected_sfs,neutral_sfs,max_theta_site,max_p_array,max_gamma,boundary_array,max_alpha,0,zero_class,false);
+    [max_likelihood,max_alpha,g_mix_sel_fold,g_mix_neu_fold] = total_likelihood(selected_sfs,neutral_sfs,P__samp,max_theta_site,max_p_array,max_gamma,boundary_array,max_alpha,0,zero_class,false);
     
     x_neu = [ones(1,6),initial_theta_site];
     [x_max_neu,all_neutral_lik] = fminsearch(@(x_neu) re_param_neu(x_neu,init_alpha),x_neu,new_set);    
@@ -354,7 +387,7 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
     fprintf(fileID, '%s;',num2str((1-sum(initial_p_array))));
     
     fprintf(fileID, '%6.4f;', initial_theta_site);
-    fprintf(fileID, '%s,%s', num2str(initial_lethal_array(1)), num2str(initial_lethal_array(2)));
+    fprintf(fileID, '%s,%s,%s', num2str(initial_lethal_array(1)), num2str(initial_lethal_array(2)), num2str(N_pop));
     fprintf(fileID, ')\t');
     
     fprintf(fileID, '(');
