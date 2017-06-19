@@ -26,18 +26,25 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
         p_array = abs(p_array);
         alpha = abs(alpha);
         theta_site = abs(theta_site);
-
+        
+        if(length(gamma_array1) == 1)
+           p_array(1) = 0;
+        end
         if((sum(p_array) > (1-lethal_perc)) || (lethal_perc > 1) || (lethal_perc < 0))
             loglambda = -1/0;
             return;
         end
         
-        gamma_array1(1) = 0;
         bool = 0;
-        for index1 = 2:length(gamma_array1)
-            bool = bool + (gamma_array1(index1) <= boundary_array(index1)) + (gamma_array1(index1) > boundary_array(index1-1));
+        for index1 = 1:length(gamma_array1)
+            if(boundary_array(index1,2) == boundary_array(index1,1))
+                gamma_array1(index1) = boundary_array(index1,2);
+            else
+                bool = bool + (gamma_array1(index1) < boundary_array(index1,2)) + (gamma_array1(index1) > boundary_array(index1,1));
+            end
         end
         if(bool>0)
+           % bool,gamma_array1
             loglambda = -1/0;
             return;
         end 
@@ -151,7 +158,7 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
         alpha( floor((length(neutral_sfs)-17) / 2) : (length(neutral_sfs)-2) ) = x(6);    
 
         gamma_array_1 = [0,0];
-        b_array = [0,-700];       
+        b_array = [[0,0];[0,0]];       
         loglambda = -1*total_likelihood(neutral_sfs,neutral_sfs,theta_site,p_array,gamma_array_1,b_array,alpha,0,zero_class,false);
     end
     
@@ -201,7 +208,7 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
         end
 
         gamma_array_1 = [0,0];
-        b_array = [0,-700];
+        b_array = [[0,0];[0,0]];
         loglambda = -1*total_likelihood(selected_sfs,neutral_sfs,theta_site,p_array,gamma_array_1,b_array,alpha,0,zero_class,false);
     end
 
@@ -226,7 +233,7 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
         end
         
         gamma_array_1 = [0,0];
-        b_array = [0,-700];
+        b_array = [[0,0];[0,0]];
         lethal_perc = x(length(x));
         loglambda = -1*total_likelihood(selected_sfs,neutral_sfs,theta_site,p_array,gamma_array_1,b_array,alpha,lethal_perc,zero_class,false);
     end
@@ -324,7 +331,7 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
 
     if(free_alpha && ~neutral_alpha)
         fprintf(fileID, '%s\t', 'freeAlpha6Bins');
-    elseif(neutral_alpha)
+    elseif(neutral_alpha && free_alpha)
         fprintf(fileID, '%s\t', 'neutAlpha6Bins');
     else
         fprintf(fileID, '%s\t', 'fixedAlpha_one');
@@ -336,10 +343,10 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
     end
     fprintf(fileID, '%s;', num2str(initial_gamma_array(length(initial_gamma_array))));
     
-    for index = 1:(length(boundary_array)-1)
-        fprintf(fileID, '%s,', num2str(boundary_array(index)));
+    for index = 1:(length(max_gamma)-1)
+        fprintf(fileID, '%s,', mat2str(boundary_array(index,:)));
     end
-    fprintf(fileID, '%s;', num2str(boundary_array(length(boundary_array))));
+    fprintf(fileID, '%s;', mat2str(boundary_array(length(max_gamma),:)));
     
     for index = 1:(length(initial_p_array))
         fprintf(fileID, '%s,', num2str(initial_p_array(index)));
@@ -350,14 +357,24 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
     fprintf(fileID, '%s,%s', num2str(initial_lethal_array(1)), num2str(initial_lethal_array(2)));
     fprintf(fileID, ')\t');
     
-    fprintf(fileID, '(neutral %6.4f, ', max_p_array(1));   
-    for index = 2:(length(max_gamma)-1)
+    fprintf(fileID, '(');
+    for index = 1:(length(max_gamma)-1)
+        if(boundary_array(index,2) == boundary_array(index,1)) 
+            max_gamma(index) = boundary_array(index,2);
+        end
         fprintf(fileID, '%s %6.4f, ', num2str(max_gamma(index)), max_p_array(index));
     end  
+    if(boundary_array(length(max_gamma),2) == boundary_array(length(max_gamma),1)) 
+        max_gamma(length(max_gamma)) = boundary_array(length(max_gamma),2);
+    end
+    pmax = 1-sum(max_p_array);
+    if(length(max_gamma) == 1) 
+        pmax = 1;
+    end
     if(zero_class)
-        fprintf(fileID, '%s %6.4f, theta %6.4f): ', num2str(max_gamma(length(max_gamma))), (1-sum(max_p_array)), max_theta_site);
+        fprintf(fileID, '%s %6.4f, theta %6.4f): ', num2str(max_gamma(length(max_gamma))), pmax, max_theta_site);
     else
-        fprintf(fileID, '%s %6.4f): ', num2str(max_gamma(length(max_gamma))), (1-sum(max_p_array)));
+        fprintf(fileID, '%s %6.4f): ', num2str(max_gamma(length(max_gamma))), pmax);
     end
     fprintf(fileID,'%6.4f\t', max_likelihood);
     
@@ -370,11 +387,21 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
     if(zero_class)
         fprintf(fileID,'(neutral %6.4f, lethal %6.4f, theta %6.4f): %6.4f\t', (1-max_neu_lethal_perc), max_neu_lethal_perc, max_theta_site_neu_lethal, max_neutral_lethal_lik);
         
-        fprintf(fileID, '(neutral %6.4f, ', max_lethal_p_array(1));    
-        for index = 2:(length(max_gamma)-1)
+        fprintf(fileID, '(');    
+        for index = 1:(length(max_lethal_gamma)-1)
+            if(boundary_array(index,2) == boundary_array(index,1)) 
+                max_lethal_gamma(index) = boundary_array(index,2);
+            end
             fprintf(fileID, '%s %6.4f, ', num2str(max_lethal_gamma(index)), max_lethal_p_array(index));
         end
-        fprintf(fileID,'%s %6.4f, lethal %6.4f, theta %6.4f): %6.4f\t', num2str(max_lethal_gamma(length(max_lethal_gamma))), (1-sum(max_lethal_p_array)-max_lethal_perc), max_lethal_perc, max_theta_site_lethal, max_lethal_lik);
+        if(boundary_array(length(max_lethal_gamma),2) == boundary_array(length(max_lethal_gamma),1)) 
+            max_lethal_gamma(length(max_lethal_gamma)) = boundary_array(length(max_lethal_gamma),2);
+        end
+        pmax = 1-sum(max_p_array)-max_lethal_perc;
+        if(length(max_gamma) == 1) 
+            pmax = 1-max_lethal_perc;
+        end
+        fprintf(fileID,'%s %6.4f, lethal %6.4f, theta %6.4f): %6.4f', num2str(max_lethal_gamma(length(max_lethal_gamma))), pmax, max_lethal_perc, max_theta_site_lethal, max_lethal_lik);
     end
     fprintf(fileID, '\n');
     fclose(fileID);
