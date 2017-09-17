@@ -430,7 +430,7 @@ function [max_theta_site,max_p_array,max_alpha,max_likelihood,g_mix_sel_fold,g_m
         if(boundary_array(length(max_lethal_gamma),2) == boundary_array(length(max_lethal_gamma),1)) 
             max_lethal_gamma(length(max_lethal_gamma)) = boundary_array(length(max_lethal_gamma),2);
         end
-        pmax = 1-sum(max_p_array)-max_lethal_perc;
+        pmax = 1-sum(max_lethal_p_array)-max_lethal_perc;
         if(length(max_gamma) == 1) 
             pmax = 1-max_lethal_perc;
         end
